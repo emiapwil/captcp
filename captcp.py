@@ -2646,13 +2646,13 @@ class ConnectionAnalyzeMod(Mod):
 
 
 
-class ThroughputMod(Mod):
+class ThroughputRttMod(Mod):
 
     def create_gnuplot_environment(self):
         gnuplot_filename = "throughput.gpi"
         makefile_filename = "Makefile"
 
-        title = "set title \"Throughput Graph\""
+        title = "set title \"ThroughputRtt Graph\""
         if "no-title" in self.opts.gnuplotoptions:
             title = 'set notitle'
         if "title" in self.opts.gnuplotoptions:
@@ -2706,6 +2706,8 @@ class ThroughputMod(Mod):
         self.total_data_len = 0
         self.time_clipping_delta = 0.0
         self.first_packet_seen = None
+        self.snd_time = {}
+        self.rtt = 0
         if not self.opts.stdio:
             # no need to check and generate Gnuplot
             # environment
@@ -2794,11 +2796,11 @@ class ThroughputMod(Mod):
                                 (self.opts.unit, self.opts.samplelength))
             self.logger.warning("Use --per-second (-p) option if you want per-second average")
 
-    def output_data(self, time, amount):
+    def output_data(self, time, amount, rtt):
         if self.opts.stdio:
-            sys.stdout.write("%5.1f  %10.1f\n" % (time, amount))
+            sys.stdout.write("%5.1f  %10.1f %5.1f\n" % (time, amount, rtt))
         else:
-            self.throughput_file.write("%.5f %.8f\n" % (time, amount))
+            self.throughput_file.write("%.5f %.8f %5.1f\n" % (time, amount, rtt))
 
 
     def pre_process_packet(self, ts, packet):
@@ -2838,6 +2840,8 @@ class ThroughputMod(Mod):
             if self.opts.reference_time:
                 self.time_clipping_delta = Utils.ts_tofloat(self.start_time -
                                                             self.first_packet_seen)
+        # calculate the rtt
+        tst = (pi.ack, pi.options['tsecr']) if 'tsecr' in pi.options else (pi.ack, 0)
 
         timediff = Utils.ts_tofloat(ts - self.start_time)
 
@@ -2846,7 +2850,7 @@ class ThroughputMod(Mod):
             # fill silent periods between a samplelength
             while self.last_sample + (self.opts.samplelength * 2) < timediff:
                 self.last_sample += self.opts.samplelength
-                self.output_data(self.last_sample + self.time_clipping_delta, 0)
+                self.output_data(self.last_sample + self.time_clipping_delta, 0, self.rtt)
 
             if self.opts.persecond:
                 amount = U.byte_to_unit(self.data / self.opts.samplelength, self.opts.unit)
@@ -2854,7 +2858,7 @@ class ThroughputMod(Mod):
                 amount = U.byte_to_unit(self.data, self.opts.unit)
 
             self.output_data(self.last_sample + self.opts.samplelength +
-                             self.time_clipping_delta, amount)
+                             self.time_clipping_delta, amount, self.rtt)
             self.data  = 0
             self.last_sample += self.opts.samplelength
 
@@ -2876,12 +2880,12 @@ class ThroughputMod(Mod):
         # fine, packets where captured
         timediff =  Utils.ts_tofloat(self.end_time - self.start_time)
         self.logger.warning("total data (%s): %d %s (%s)" %
-                (self.opts.mode, 
+                (self.opts.mode,
                 U.byte_to_unit(self.total_data_len, self.opts.unit),
                 self.opts.unit,
                 U.best_match(self.total_data_len)))
         self.logger.warning("throughput (%s): %.2f %s/s (%s/s)" %
-                (self.opts.mode, 
+                (self.opts.mode,
                 U.byte_to_unit(float(self.total_data_len) / timediff, self.opts.unit),
                 self.opts.unit,
                 U.best_match(float(self.total_data_len) / timediff)))
@@ -4510,7 +4514,7 @@ class StatisticMod(Mod):
         transport_len = int(len(packet.data))
 
         actual_data = pi.seq + data_len
- 
+
         if not sc.user_data["_highest_data_seen"]:
             # no rexmt possible, skip rexmt processing
             sc.user_data["_highest_data_seen"] = actual_data
@@ -4581,7 +4585,7 @@ class StatisticMod(Mod):
     def print_sc_statistics(self, cid, statistic):
         left_width  = self.calc_max_label_length()
         right_width = max([self.calc_max_data_length(sc) for sc in statistic])
-        
+
         line_length = left_width + right_width + 4
 
 
@@ -5297,7 +5301,7 @@ class SocketStatisticsMod(Mod):
 
                 time_delta = self.timedelta_to_milli(time - value.start)
                 self.write_data_files(path, time_delta, event.data)
-            
+
 
     def execute_ss(self):
         cmd = ["ss", "-i", "-m", "-e", "-t", "-n"]
@@ -5313,7 +5317,7 @@ class SocketStatisticsMod(Mod):
             self.db[key].start()
         return self.db[key]
 
-    
+
     def parse_std_line(self, std):
         retdata = dict()
         timer_info = uid = None
@@ -5347,7 +5351,7 @@ class SocketStatisticsMod(Mod):
             retdata["sk"]         = std[7]
 
         if len(std) == 9 or len(std) == 10:
-            # ['ESTAB', '0', '0', '10.1.11.169:55427', '192.168.1.64:80', 
+            # ['ESTAB', '0', '0', '10.1.11.169:55427', '192.168.1.64:80',
             # 'timer:(keepalive,15sec,0)', 'uid:1000', 'ino:185811', 'sk:ffff88001894a300']
             retdata["state"]      = std[0]
             retdata["recv_q"]     = std[1]
@@ -5504,7 +5508,7 @@ class SocketStatisticsMod(Mod):
 
 
     def process_data(self, ss_output):
-        # split into lines, remove tabs and empty 
+        # split into lines, remove tabs and empty
         lines = ss_output.split('\n')
         lines = [line.strip() for line in lines]
         lines = filter(None, lines)
@@ -5652,7 +5656,7 @@ class Captcp:
        "flowgraph":               [ "FlowGraphMod", "Visualize packet flow over time" ],
        "timesequence":            [ "TimeSequenceMod", "Plot a Time-Sequence graph" ],
        "show":                    [ "ShowMod", "Tcpdump/tshark like mode" ],
-       "throughput":              [ "ThroughputMod", "Graph the throughput over time graph" ],
+       "throughput":              [ "ThroughputRttMod", "Graph the throughput over time graph" ],
        "inflight":                [ "InFlightMod", "Visualize all packets in flight and not ACKed" ],
        "spacing":                 [ "SpacingMod", "Time between packets and acks" ],
        "spacing-data-ack":        [ "SpacingDataAckMod", "Time between data and their first corresp. ack packets"],
@@ -5725,7 +5729,7 @@ class Captcp:
         sys.stdout.write("Check programs:\n")
         for program in programs:
             self.check_program(program)
-        
+
 
     def print_version(self):
         sys.stdout.write("%s\n" % (__version__))
